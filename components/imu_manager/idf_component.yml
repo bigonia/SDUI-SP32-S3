@@ -1,0 +1,3 @@
+dependencies:
+  waveshare/qmi8658: 
+    version: "*"
