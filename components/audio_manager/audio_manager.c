@@ -146,6 +146,11 @@ void audio_record_stop(void)
     }
 }
 
+bool audio_manager_is_recording(void)
+{
+    return is_recording;
+}
+
 void audio_app_start(void)
 {
     ESP_LOGI(TAG, "Initializing Audio subsystem (using official BSP)...");

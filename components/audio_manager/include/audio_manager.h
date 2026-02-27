@@ -14,6 +14,9 @@ void audio_app_start(void);
 void audio_record_start(void);
 void audio_record_stop(void);
 
+// 获取当前是否正在录音
+bool audio_manager_is_recording(void);
+
 // 接收云端下发的 Base64 音频并播放
 void audio_play_base64(const char *base64_data);
 

@@ -1,12 +1,28 @@
 /**
  * @file sdui_parser.h
- * @brief SDUI 容器化布局解析引擎
+ * @brief SDUI 容器化布局解析引擎 (增强版)
  *
  * 将 Server 下发的 JSON UI 描述树递归解析为 LVGL 对象。
- * 支持 container / label / button / image 等原子组件，
- * 以及 flex-box 布局、Action URI 事件绑定。
  *
- * 针对 1.75" 圆屏（466x466）定义了安全边距与居中约束。
+ * 支持组件类型:
+ *   - container : Flex 容器，支持 scrollable 滚动属性
+ *   - label     : 文本标签，支持 marquee 跑马灯 (long_mode)
+ *   - button    : 可交互按钮，支持 on_click/on_press/on_release Action URI
+ *   - image     : 流式图像，Base64(RGB565) 解码，存于 PSRAM，支持 spin 旋转动画
+ *   - bar       : 进度指示条，支持 value/min/max/bg_color/indic_color
+ *   - slider    : 滑动控制，支持 value/min/max/on_change 事件上报
+ *   - particle  : 粒子特效，LVGL Canvas(PSRAM)，≤30 粒子
+ *
+ * 支持动画属性 (anim 字段，服务端驱动):
+ *   - blink       : 透明度闪烁
+ *   - breathe     : 透明度呼吸
+ *   - spin        : 图片旋转 (限≤2个并发)
+ *   - slide_in    : 方向滑入入场
+ *   - shake       : 水平抖动
+ *   - color_pulse : 背景色双色渐变
+ *   - marquee     : label 跑马灯
+ *
+ * 针对 1.75" 圆屏 (466x466) 定义了安全边距与居中约束。
  */
 #ifndef SDUI_PARSER_H
 #define SDUI_PARSER_H
@@ -18,36 +34,33 @@ extern "C" {
 #endif
 
 /* ---- 屏幕常量 ---- */
-#define SDUI_SCREEN_W         466
-#define SDUI_SCREEN_H         466
-#define SDUI_SAFE_PADDING     40   // 圆屏安全内边距 (像素)
+#define SDUI_SCREEN_W     466
+#define SDUI_SCREEN_H     466
+#define SDUI_SAFE_PADDING  40   /* 圆屏安全内边距 (像素) */
 
 /**
  * @brief 初始化 SDUI 解析引擎
- * 
  * 在 LVGL 初始化之后、WebSocket 连接之前调用。
- * 创建一个带圆屏安全边距的根视图 (root_view)。
- *
  * @return 根视图对象指针
  */
 lv_obj_t *sdui_parser_init(void);
 
 /**
  * @brief 获取 SDUI 根视图
- * @return 根视图对象指针，若未初始化返回 NULL
+ * @return 根视图对象指针，未初始化返回 NULL
  */
 lv_obj_t *sdui_parser_get_root(void);
 
 /**
- * @brief 根据完整的 JSON 布局描述重建 UI
+ * @brief 根据完整 JSON 布局描述重建 UI (含 Fade 过渡动画)
  *
- * 此函数会：
- *   1. 清除根视图的所有子节点
- *   2. 根据 JSON 递归创建 LVGL 对象树
- *   3. 为带 action 字段的组件绑定事件回调
+ * 执行步骤：
+ *   1. 根视图透明度瞬间降为 0 (隐藏旧内容)
+ *   2. 清除所有子节点和 anim 动画
+ *   3. 递归构建新 LVGL 对象树
+ *   4. 启动 200ms Fade-In 动画
  *
- * @param json_str 完整的 JSON 布局字符串（来自 "ui/layout" 主题的 payload）
- *
+ * @param json_str ui/layout 主题的 payload JSON 字符串
  * @note 必须在 LVGL 加锁状态下调用 (bsp_display_lock)
  */
 void sdui_parser_render(const char *json_str);
@@ -60,12 +73,12 @@ void sdui_parser_render(const char *json_str);
 lv_obj_t *sdui_parser_find_by_id(const char *id);
 
 /**
- * @brief 根据 ID 更新指定组件的属性
+ * @brief 按 ID 增量更新组件属性
  *
- * 支持增量更新（不重建整棵树），常用于 "ui/update" 主题。
- * payload 示例: {"id": "label_1", "text": "Hello"}
+ * 支持字段: text / hidden / bg_color / opa / value (bar/slider) /
+ *           indic_color (bar) / anim (触发动画)
  *
- * @param json_str 增量更新 JSON 字符串
+ * @param json_str ui/update 主题的 payload JSON 字符串
  * @note 必须在 LVGL 加锁状态下调用
  */
 void sdui_parser_update(const char *json_str);
@@ -74,4 +87,4 @@ void sdui_parser_update(const char *json_str);
 }
 #endif
 
-#endif // SDUI_PARSER_H
+#endif /* SDUI_PARSER_H */

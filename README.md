@@ -28,6 +28,7 @@
 │   ├── audio_manager/      # 媒体引擎：音频驱动 (ES8311/ES7210)、电源管理与 Base64 编解码
 │   ├── imu_manager/        # 空间感知：QMI8658/QMA7981 传感器驱动及姿态算法
 │   ├── wifi_manager/       # 网络设施：Wi-Fi STA 状态管理
+│   ├── telemetry_manager/  # 遥测上报：设备唯一码、WiFi RSSI/IP、芯片温度、堆内存定时上报
 │   └── esp32_s3_touch_amoled_1_75c/ # BSP：屏幕及触摸驱动底层支持
 ├── main/
 │   └── main.c              # 业务入口：初始化调度、动态 SDUI 布局入口与息屏管理
@@ -43,11 +44,25 @@
 
 ### 3.1 上行链路 (终端 -> 云端)
 
+> **所有上行消息均在信封顶层自动携带 `device_id`（eFuse MAC），服务器可直接从任意消息中识别来源终端。**
+
 | 主题 (Topic) | 载荷示例 (Payload) | 触发场景与说明 |
 | --- | --- | --- |
 | `ui/click` | `{"id": "btn_1"}` | 屏幕原子按钮触控事件（默认 Action URI）。 |
 | `audio/record` | `{"state": "stream", "data": "..."}` | 录音开启/停止信号及 PCM 转 Base64 音频数据流。 |
 | `motion` | `{"type": "shake", "magnitude": 15.3}` | IMU 识别到的物理姿态变化（如摇一摇）。 |
+| `telemetry/heartbeat` | `{"wifi_rssi":-65, "ip":"192.168.1.5", "temperature":42.5, "free_heap_internal":45000, "free_heap_total":3500000, "uptime_s":120}` | **设备遥测心跳**：每 30 秒定时上报，服务器以 `device_id` 为 key 管理终端注册表。 |
+
+**完整上行信封格式**（`device_id` 由 `sdui_bus` 统一自动注入，各业务模块无感知）：
+
+```json
+{
+  "topic":     "ui/click",
+  "device_id": "1020BA3D35D0",
+  "payload":   {"id": "btn_add"}
+}
+```
+
 
 ### 3.2 下行链路 (云端 -> 终端)
 
@@ -63,20 +78,25 @@ Server 下发的 `ui/layout` 载荷为树状 JSON 结构，支持以下原子组
 
 | 属性 | 类型 | 说明 | 示例 |
 | --- | --- | --- | --- |
-| `type` | string | 组件类型: `container` / `label` / `button` | `"type": "button"` |
+| `type` | string | 组件类型: `container` / `label` / `button` / `image` / `bar` / `slider` / `particle` | `"type": "bar"` |
 | `id` | string | 组件唯一 ID，用于 `ui/update` 增量更新 | `"id": "btn_rec"` |
 | `text` | string | 文本内容 (label/button) | `"text": "Hold to Talk"` |
 | `flex` | string | Flex 布局方向: `row` / `column` / `row_wrap` / `column_wrap` | `"flex": "column"` |
 | `justify` | string | 主轴对齐: `start` / `center` / `end` / `space_between` | `"justify": "center"` |
 | `align_items` | string | 交叉轴对齐 | `"align_items": "center"` |
+| `scrollable` | boolean | 容器启用触摸滚动 (container 专用) | `"scrollable": true` |
 | `w` / `h` | number/string | 尺寸：像素 `120`、百分比 `"50%"`、`"full"` / `"content"` | `"w": "80%"` |
 | `align` | string | 绝对定位: `center` / `top_mid` / `bottom_mid` 等 | `"align": "center"` |
 | `bg_color` | string | 背景色 (Hex) | `"bg_color": "#2ecc71"` |
 | `text_color` | string | 文字颜色 (Hex) | `"text_color": "#FFFFFF"` |
-| `font_size` | number | 字体大小，映射到 Montserrat 14/16/20/24/28 | `"font_size": 24` |
+| `font_size` | number | 字体大小，映射到 Montserrat 14/16/20/24/26 | `"font_size": 24` |
 | `gap` | number | Flex 子元素间距 | `"gap": 10` |
 | `pad` / `radius` | number | 内边距 / 圆角 | `"pad": 8` |
+| `shadow_w` / `shadow_color` | number/string | 阴影宽度 / 阴影颜色 | `"shadow_w": 6` |
+| `opa` | number | 整体不透明度 (0–255) | `"opa": 180` |
 | `hidden` | boolean | 隐藏/显示 | `"hidden": true` |
+| `long_mode` | string | label 长文本: `wrap` / `scroll` / `dot` / `marquee` | `"long_mode": "marquee"` |
+| `anim` | object | 动画描述对象，见 3.6 节 | `"anim": {"type": "blink"}` |
 | `children` | array | 子组件数组 | `"children": [...]` |
 
 ### 3.4 Action URI 事件绑定协议
@@ -111,16 +131,126 @@ Server 下发的 `ui/layout` 载荷为树状 JSON 结构，支持以下原子组
 
 ---
 
-## 四、 核心组件机制
+### 3.5 增强型原子组件
+
+| 组件类型 (`type`) | 关键属性 | 功能说明 |
+| --- | --- | --- |
+| `image` | `src`(Base64), `img_w`, `img_h`, `w`, `h`, `radius` | **流式图像组件**：Base64(RGB565) 解码，存于 PSRAM，支持 `spin` 旋转动画。 |
+| `bar` | `value`(0-100), `min`, `max`, `bg_color`, `indic_color` | **进度条**：展示播放进度、传感器量程，支持 `ui/update` 动画更新。 |
+| `slider` | `value`, `min`, `max`, `on_change` | **滑动控制**：音量/亮度调节，拖动松手后通过 Action URI 上报当前值。 |
+| `particle` | `count`(≤30), `color`, `particle_size`, `duration`(ms), `canvas_w`, `canvas_h` | **粒子特效**：PSRAM Canvas (最大200×200×2B=80KB)，重力粒子追踪。 |
+
+**`bar` 流式示例（音乐播放垆）**：
+```json
+{
+  "type": "bar", "id": "progress",
+  "w": 280, "h": 6,
+  "value": 35,
+  "bg_color": "#2a2a2a",
+  "indic_color": "#1db954",
+  "radius": 3
+}
+```
+
+**`slider` 流式示例（音量调节）**：
+```json
+{
+  "type": "slider", "id": "vol",
+  "w": 240, "value": 70, "min": 0, "max": 100,
+  "on_change": "server://ui/volume"
+}
+```
+
+**`slider` 上报格式**：
+```json
+{"topic": "ui/volume", "device_id": "...", "payload": {"id": "vol", "value": 70}}
+```
+
+---
+
+### 3.6 动画特效协议 (anim 字段)
+
+任意组件可附加可选的 `anim` 对象，服务端利用此字段驱动终端动画，无需修改固件。
+
+| `anim.type` | 实现机制 | 关键参数 | 内存开销 |
+| --- | --- | --- | --- |
+| `blink` | 透明度 0⇔255 脉冲 | `duration`(ms), `repeat`(-1=无限) | ~60B |
+| `breathe` | 透明度 min_opa⇔max_opa 慢速脉冲 | `min_opa`, `max_opa`, `duration` | ~60B |
+| `spin` | 图片 0→3600 循环旋转 (image 专用, ≤ 2 个并发) | `duration`, `direction`(cw/ccw) | ~60B |
+| `slide_in` | translate 倏移入场（单次） | `from`(left/right/top/bottom), `duration` | ~60B |
+| `shake` | x 轴左右抖动（单次） | `amplitude`(像素), `duration` | ~60B |
+| `color_pulse` | bg_color 双色渐变脉冲 | `color_a`(Hex), `color_b`(Hex), `duration`, `repeat` | ~120B |
+| `marquee` | label 原生循环滚动 (label 专用) | 无 | 0 |
+
+**示例：录音按鈕与封面旋转**
+```json
+{
+  "flex": "column", "align_items": "center", "gap": 20,
+  "children": [
+    {
+      "type": "image", "id": "cover",
+      "src": "<base64_rgb565_data>", "img_w": 120, "img_h": 120,
+      "w": 120, "h": 120, "radius": 60,
+      "anim": {"type": "spin", "duration": 8000, "direction": "cw"}
+    },
+    {"type": "label", "text": "歌曲名称器吧吗头歌歌唱中", "font_size": 14,
+     "long_mode": "marquee", "w": 250},
+    {
+      "type": "bar", "id": "progress", "w": 280, "h": 6,
+      "value": 35, "bg_color": "#2a2a2a", "indic_color": "#1db954"
+    },
+    {
+      "type": "button", "id": "btn_rec", "text": "录音",
+      "bg_color": "#e94560", "radius": 25, "w": 100, "h": 50,
+      "on_press": "local://audio/cmd/record_start",
+      "on_release": "local://audio/cmd/record_stop",
+      "anim": {"type": "color_pulse", "color_a": "#e94560", "color_b": "#ff6b6b", "duration": 600, "repeat": -1}
+    }
+  ]
+}
+```
+
+> **内存安全策略**：所有动画局部数据均分配于堆，并由 `LV_EVENT_DELETE` 自动释放；image/particle 缓冲均分配到 PSRAM，从不占用内部 SRAM。
+
+---
+
+## 四、 终端配网与引导流程 (SoftAP + Web Config)
+
+为解决 ESP32-S3 SRAM 有限带来的问题并提供极简的用户体验，系统设计了基于 **双态启动** 与 **Captive Portal** 的配网流程，用于取代以往代码硬编码网络信息的手段。
+
+### 4.1 双态启动模型
+在 `main.c` 引导早期（位于 SDUI 引擎初始化之后，但在音频与网络等大内存消耗大户分配之前），通过判断 NVS Storage 分区的状态，将设备引导入不同形态：
+1. **配网态 (Provisioning State)**：NVS 中未检测到有效 SSID 凭证。此时不启动高负载业务，而是转为开启 `SDUI-Setup` （密码 12345678）的 Wi-Fi 热点，并在屏幕极简渲染相应的连网指引。
+2. **托管态 (Cloud State)**：检测到有效凭证。系统按日常全能状态启动，提取 NVS 存留的 Wi-Fi 与 WebSocket 地址，正常连接远端服务器。
+
+### 4.2 Captive Portal (强制门户弹窗)
+在进入配网态时，底层网络模块采用了“阅后即焚”的驻留服务设计：
+- **UDP DNS 劫持**：运行于本地 53 端口。无脑将手机接入热点后发出的针对 `captive.apple.com` 等探活域名的 DNS 解析，全部应答为 ESP32 本机的 IP `192.168.4.1`。
+- **HTTP 302 重定向**：内置极简 HTTP Web Server 提供自适应配置表单主页 `/`；当收到其他随机的 HTTP GET 探路请求时，一律捕获并重定向至首页。
+
+当用户在自动弹出的手机配置表单中，输入所需连接的局域网 SSID、密码及 WebSocket Server 指向（带端口）点击保存后，**系统将持久化数据并立即触发一次 `esp_restart()` 软重启**。此举既能挂载应用新网络配置，亦能彻底洗牌释放 SoftAP/HTTP 运行期间带来的严重内部 SRAM 内存碎片。
+
+---
+
+## 五、 核心组件机制
 
 1. **消息枢纽 (sdui_bus)**：采用订阅/发布（Pub/Sub）模式，实现各业务解耦。支持三种路由方式：下行 (`route_down`)、上行 (`publish_up`)、本地 (`publish_local`)。
-2. **布局引擎 (sdui_parser)**：递归解析 JSON UI 树并映射为 LVGL 对象。支持 Flex 布局、Action URI 事件绑定、圆屏安全边距(40px)。
+2. **布局引擎 (sdui_parser)**：递归解析 JSON UI 树并映射为 LVGL 对象。支持 Flex 布局、Action URI 事件绑定、圆屏安全边距(40px)、动画特效驱动。
 3. **通信信使 (websocket_manager)**：支持断线被动重连。在弱网断线时主动拦截上行发布，避免数据堆积导致 OOM。
 4. **音频全双工 (audio_manager)**：支持双通道麦克风读取与基于 I2S 的 DAC 音频播放。通过总线事件订阅驱动（`audio/cmd/*`）。
 5. **空间感知 (imu_manager)**：通过 `sdui_bus` 上行发布姿态事件（如 `motion` 主题），与 WebSocket 完全解耦。
+6. **网络管理 (wifi_manager)**：实现上文所述的双态引导管控，以及 SoftAP 和 STA 无线基站链路的自动化配置。
+7. **遥测上报 (telemetry_manager)**：后台低优先级任务（栈在 PSRAM），每 30s 采集以下信息并通过 `sdui_bus` 上报 `telemetry/heartbeat` 主题：
+   - **`device_id`**：eFuse MAC 地址（6字节 HEX 字符串），芯片出厂写入，全局唯一，作为服务端管理终端的唯一 Key。
+   - **`wifi_rssi`**：当前关联 AP 的信号强度（dBm）。
+   - **`ip`**：终端在局域网内分配的 IP 地址。
+   - **`temperature`**：ESP32-S3 内置温度传感器数据（精度 ±5°C）。
+   - **`free_heap_internal` / `free_heap_total`**：内部 SRAM 及总堆空间剩余，可用于远程监控内存健康。
+   - **`uptime_s`**：设备持续运行时长（秒）。
+
 ---
 
-## 五、 🚧 ESP32-S3 内部 SRAM 内存治理手册 (重要)
+## 六、 🚧 ESP32-S3 内部 SRAM 内存治理手册 (重要)
 
 ESP32-S3 拥有 ~512KB 内部 SRAM 和 8MB PSRAM，但**两者并不等价**：SPI DMA、FreeRTOS 任务栈等硬件级操作严格依赖内部 SRAM 的**连续块**。WiFi 协议栈运行后会将内部 SRAM 碎片化，使之前看似充裕的空间无法满足大块连续分配。
 
@@ -242,7 +372,7 @@ CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 ---
 
-## 六、 快速上手与编译烧录
+## 七、 快速上手与编译烧录
 
 由于本项目重构过底层 `sdkconfig.defaults` 内存配比映射，**首次编译/清理后重新编译时，必须删除原生成的配置文件**。
 
@@ -271,7 +401,7 @@ idf.py build flash monitor
 
 ---
 
-## 七、 云端业务层 (Python Server) MVP 说明
+## 八、 云端业务层 (Python Server) MVP 说明
 
 配套的 `server.py` 是用于调试与验证 SDUI 原型的 MVP (Minimum Viable Product) 设计实现，旨在演示端云交互的基本链路，尚未进行高可用与工程化封装。
 
@@ -281,6 +411,7 @@ idf.py build flash monitor
    - 监听并处理来自终端的 `ui/click` 上行事件，例如处理按钮的计数累加，并返回 `ui/update` 更新组件展示。
    - 监听并处理 `audio/record` 的音频流，执行本地存储 `debug_recv.wav` 以及基础的 Speech-To-Text (STT) 识别。
    - 处理终端传感器事件如 `motion` (摇一摇)，触发 UI 或逻辑的变动。
+   - 监听 `telemetry/heartbeat` 事件，可实时查看终端设备的内存分配及网络探针状况。
 3. **Debug 调试控制台**：在命令行提供了一套极简的手动操作台，方便开发者在联机运行时下发 `layout` (重置布局) / `update` (更新组件) / `raw` (原始指令) 以辅助硬件侧界面的调试。
 
 ### 后续演进方向

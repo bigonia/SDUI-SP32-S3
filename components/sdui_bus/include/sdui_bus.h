@@ -19,8 +19,15 @@ void sdui_bus_subscribe(const char *topic, sdui_bus_cb_t cb);
 void sdui_bus_route_down(const char *raw_json);
 
 // 上行发布接口：各个模块调用此接口上报事件
-// 总线会自动封装为 {"topic": "...", "payload": ...} 格式并发出
+// 总线会自动封装为 {"topic": "...", "device_id": "...", "payload": ...} 格式并发出
 void sdui_bus_publish_up(const char *topic, const char *payload);
+
+/**
+ * @brief 设置设备唯一码（由 telemetry_manager 在初始化时调用）
+ * 设置后，所有 sdui_bus_publish_up() 的上行消息将自动在信封中附加 device_id
+ * @param device_id 设备唯一码字符串（如 "AABBCCDDEEFF"）
+ */
+void sdui_bus_set_device_id(const char *device_id);
 
 // 本地总线发布接口：在终端内部路由事件（不经过 WebSocket）
 // 用于 Action URI "local://" 路由。触发对应 topic 的本地订阅者

@@ -7,6 +7,9 @@
 #define MAX_SUBSCRIBERS 15
 static const char *TAG = "SDUI_BUS";
 
+// 设备唯一码（由 telemetry_manager 在启动时设置）
+static char s_device_id[18] = {0};
+
 // 订阅者注册表节点
 typedef struct {
     char topic[32];
@@ -19,6 +22,13 @@ static uint8_t sub_count = 0;
 void sdui_bus_init(void) {
     sub_count = 0;
     ESP_LOGI(TAG, "SDUI Bus Initialized");
+}
+
+void sdui_bus_set_device_id(const char *device_id) {
+    if (!device_id) return;
+    strncpy(s_device_id, device_id, sizeof(s_device_id) - 1);
+    s_device_id[sizeof(s_device_id) - 1] = '\0';
+    ESP_LOGI(TAG, "Device ID registered: %s", s_device_id);
 }
 
 void sdui_bus_subscribe(const char *topic, sdui_bus_cb_t cb) {
@@ -74,6 +84,11 @@ void sdui_bus_route_down(const char *raw_json) {
 void sdui_bus_publish_up(const char *topic, const char *payload) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "topic", topic);
+
+    // 自动在封套中附加设备唯一码（若已设置）
+    if (s_device_id[0] != '\0') {
+        cJSON_AddStringToObject(root, "device_id", s_device_id);
+    }
     
     // 尝试判断 payload 是否为有效 JSON 以保持结构扁平化
     cJSON *payload_json = cJSON_Parse(payload);

@@ -89,7 +89,7 @@ void websocket_app_start(const char *uri, websocket_rx_cb_t cb)
         .uri = uri,
         .reconnect_timeout_ms = 5000,   // 开启自动重连：断线后每隔 5 秒重试
         .network_timeout_ms = 10000,    // 物理网络超时判定阈值
-        .buffer_size = 2048,            // 底层 TCP 接收缓冲区大小
+        .buffer_size = 4096,            // 底层 TCP 接收缓冲区大小（增大，走 PSRAM）
     };
 
     ESP_LOGI(TAG, "Connecting to %s...", uri);
