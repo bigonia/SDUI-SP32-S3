@@ -106,7 +106,17 @@ static void audio_record_task(void *arg)
                 // 打印前 4 个字节，看是否有波动（如果配置为双声道，可分辨左右声道）
                 ESP_LOGI(TAG, "Debug PCM - L: %02x %02x | R: %02x %02x", pcm_buf[0], pcm_buf[1], pcm_buf[2], pcm_buf[3]);
 
-                mbedtls_base64_encode(base64_buf, 1500, &base64_len, pcm_buf, PCM_CHUNK_SIZE);
+                // 双声道(Stereo)转单声道(Mono) 降混 (Downmix)
+                int16_t *pcm_16 = (int16_t *)pcm_buf;
+                int sample_count = PCM_CHUNK_SIZE / 4; // 1024字节 = 256个双声道采样
+                for (int i = 0; i < sample_count; i++) {
+                    int32_t left = pcm_16[i * 2];
+                    int32_t right = pcm_16[i * 2 + 1];
+                    pcm_16[i] = (int16_t)((left + right) / 2); // 合并双声道
+                }
+                size_t mono_size = sample_count * 2; // 单声道 256 个采样的字节数 = 512
+
+                mbedtls_base64_encode(base64_buf, 1500, &base64_len, pcm_buf, mono_size);
                 base64_buf[base64_len] = '\0';
 
                 // 组装总线 payload
